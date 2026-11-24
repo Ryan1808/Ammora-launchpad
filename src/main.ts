@@ -137,18 +137,19 @@ async function loadLaunches() {
       if (md.symbol) { $(`#sy-${i}`).textContent = `$${md.symbol} · config #${l.configId}`; $(`#av-${i}`).textContent = String(md.symbol).slice(0, 2).toUpperCase(); }
     });
     const fillToken = async (l: Launch, i: number) => {
-      try {
+      for (let attempt = 0; attempt < 3; attempt++) try {
         const t = await tokenInfo(l.token);
         const md = parseMetadata(l.metadataURI);
         $(`#nm-${i}`).textContent = t.name;
         $(`#sy-${i}`).textContent = `$${t.symbol} · config #${l.configId}`;
         $(`#av-${i}`).textContent = t.symbol.slice(0, 2).toUpperCase();
         if (md.image && /^https:\/\//.test(md.image)) $(`#av-${i}`).innerHTML = `<img src="${esc(md.image)}" alt="" />`;
-      } catch { /* keep address fallback */ }
+        return;
+      } catch { await new Promise((r) => setTimeout(r, 600 * (attempt + 1))); /* keep address fallback */ }
     };
     const fillCurve = async (l: Launch, i: number) => {
       const st = $(`#stt-${i}`);
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const s = await curveState(l.curve);
           st.textContent = STATUS_LABEL[s.status] ?? String(s.status); st.className = `pill s${s.status}`;
@@ -156,14 +157,14 @@ async function loadLaunches() {
           $(`#pg-${i}`).style.width = Math.min(100, pct) + "%";
           $(`#rs-${i}`).textContent = `${fmt(s.quoteReserve, 18)} / ${fmt(s.migrationQuoteThreshold, 18)} WETH raised`;
           return;
-        } catch { /* retry once */ }
+        } catch { await new Promise((r) => setTimeout(r, 600 * (attempt + 1))); }
       }
       st.textContent = "n/a";
     };
     // Names first (cheap, batched), then curve states with limited concurrency.
-    await Promise.all(launches.map((l, i) => fillToken(l, i)));
+    // One pass per card (name then curve), at most 4 cards at a time, so slow phones/RPCs don't time out.
     let next = 0;
-    const worker = async () => { while (next < launches.length) { const i = next++; await fillCurve(launches[i], i); } };
+    const worker = async () => { while (next < launches.length) { const i = next++; await fillToken(launches[i], i); await fillCurve(launches[i], i); } };
     await Promise.all(Array.from({ length: 4 }, worker));
   } catch (e) {
     box.innerHTML = `<div class="skeleton err">Could not load launches: ${errMsg(e)}</div>`;

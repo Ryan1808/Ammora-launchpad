@@ -21,7 +21,8 @@ export const WETH = giwaSepoliaAutoRouteDeployment.contracts.tokens.wrappedNativ
  * Configs with migrationBaseThreshold = 0 are also blocked (same failure class).
  * Best practice: create your own launchpad Config (launch:team-config) and put its ID here.
  */
-export const DEFAULT_CONFIG_ID = 67n;
+/** Ryn's own Config (clone of #67, partner fees → ryn's wallet). Created 2026-11-25. */
+export const DEFAULT_CONFIG_ID = 91n;
 /** Reviewed Config whose economics are cloned when you create your own Config. */
 export const TEMPLATE_CONFIG_ID = 67n;
 export const BLOCKED_CONFIG_IDS: readonly bigint[] = [6n];

@@ -42,7 +42,7 @@ export const publicClient = createPublicClient({
   chain: { ...giwaSepolia, contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } } },
   // Batch calls (multicall + JSON-RPC batching) so the browser doesn't fire hundreds of parallel requests.
   batch: { multicall: { wait: 16 } },
-  transport: http(RPC_URL, { timeout: 30_000, retryCount: 3, batch: { batchSize: 40, wait: 16 } }),
+  transport: http(RPC_URL, { timeout: 20_000, retryCount: 3, retryDelay: 400 }),
 }) as PublicClient;
 
 export const curveClient = (curve: Address) =>
@@ -177,6 +177,8 @@ export function tokenInfo(token: Address): Promise<TokenInfo> {
       publicClient.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
       publicClient.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
     ]).then(([name, symbol, decimals]) => ({ name, symbol, decimals: Number(decimals) })));
+    // Don't cache failures, so a Refresh can retry.
+    tokenCache.get(k)!.catch(() => tokenCache.delete(k));
   }
   return tokenCache.get(k)!;
 }
