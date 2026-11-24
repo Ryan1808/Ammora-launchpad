@@ -39,8 +39,10 @@ export const giwaSepolia = defineChain({
 });
 
 export const publicClient = createPublicClient({
-  chain: giwaSepolia,
-  transport: http(RPC_URL, { timeout: 30_000, retryCount: 2 }),
+  chain: { ...giwaSepolia, contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } } },
+  // Batch calls (multicall + JSON-RPC batching) so the browser doesn't fire hundreds of parallel requests.
+  batch: { multicall: { wait: 16 } },
+  transport: http(RPC_URL, { timeout: 30_000, retryCount: 3, batch: { batchSize: 40, wait: 16 } }),
 }) as PublicClient;
 
 export const curveClient = (curve: Address) =>

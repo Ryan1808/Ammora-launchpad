@@ -1,7 +1,7 @@
 import "./style.css";
 import { formatUnits, parseUnits, erc20Abi, type Address, type WalletClient } from "viem";
-import { buildCreateAmmoraV4Launch, classifyAmmoraV4ExactInputFill, parseAmmoraV4LaunchCreatedReceipt } from "@ammora-protocol/sdk";
-import { DEFAULT_CONFIG_ID, LAUNCH_FACTORY, CONFIG_REGISTRY, LAUNCH_LIST_LIMIT, PROJECT_NAME, PROJECT_TAGLINE, SLIPPAGE_BPS, WETH, CHAIN_ID } from "./config";
+import { buildCreateAmmoraV4Launch, classifyAmmoraV4ExactInputFill, parseAmmoraV4LaunchCreatedReceipt, planCreateAmmoraV4Config, parseAmmoraV4ConfigCreatedReceipt } from "@ammora-protocol/sdk";
+import { DEFAULT_CONFIG_ID, TEMPLATE_CONFIG_ID, LAUNCH_FACTORY, CONFIG_REGISTRY, LAUNCH_LIST_LIMIT, PROJECT_NAME, PROJECT_TAGLINE, SLIPPAGE_BPS, WETH, CHAIN_ID } from "./config";
 import {
   addrLink, configProblem, connectWallet, curveClient, curveState, ensureAllowance, ethereum, fetchLaunches, nextConfigId,
   parseMetadata, publicClient, readConfig, sendTx, short, STATUS_LABEL, tokenInfo, txLink, waitOk, giwaSepolia, type Launch,
@@ -41,12 +41,18 @@ $("#app").innerHTML = `
   <section id="tab-create" hidden>
     <h2>Create a token</h2>
     <p class="muted">Creates a new token + bonding curve through the Ammora V4 LaunchFactory. Signed by your own wallet.</p>
+    <div class="card form" id="own-config">
+      <b>Your launchpad Config</b>
+      <p class="muted">Create your own Config so the partner fees from tokens launched here go to <i>your</i> wallet. It copies the reviewed settings of Config #${TEMPLATE_CONFIG_ID} and replaces every partner recipient with your connected address. One-time, signed by your wallet (testnet gas only).</p>
+      <button id="oc-submit" class="btn ghost wide">Create my Config (fees → my wallet)</button>
+      <div id="oc-status" class="status"></div>
+    </div>
     <div class="card form">
       <label>Token name<input id="c-name" maxlength="40" placeholder="Giwa Cat" /></label>
       <label>Symbol<input id="c-symbol" maxlength="11" placeholder="GCAT" /></label>
       <label>Description<textarea id="c-desc" rows="3" maxlength="280" placeholder="What is this token about?"></textarea></label>
       <label>Image URL (optional)<input id="c-img" placeholder="https://… or ipfs://…" /></label>
-      <label>Launch Config ID<input id="c-config" inputmode="numeric" value="${DEFAULT_CONFIG_ID}" /></label>
+      <label>Launch Config ID<input id="c-config" inputmode="numeric" value="${initialConfigId()}" /></label>
       <div id="c-config-info" class="note">Reading config…</div>
       <button id="c-submit" class="btn primary wide">Create token</button>
       <div id="c-status" class="status"></div>
@@ -124,20 +130,41 @@ async function loadLaunches() {
         <small class="muted" id="rs-${i}"></small>
       </button>`).join("") || `<div class="skeleton">No launches found.</div>`;
     box.querySelectorAll<HTMLButtonElement>(".launch").forEach((el) => el.addEventListener("click", () => openLaunch(launches[+el.dataset.i!])));
-    await Promise.all(launches.map(async (l, i) => {
+    // Show metadata name/symbol immediately when the launch carries inline metadata.
+    launches.forEach((l, i) => {
+      const md = parseMetadata(l.metadataURI) as any;
+      if (md.name) $(`#nm-${i}`).textContent = String(md.name);
+      if (md.symbol) { $(`#sy-${i}`).textContent = `$${md.symbol} · config #${l.configId}`; $(`#av-${i}`).textContent = String(md.symbol).slice(0, 2).toUpperCase(); }
+    });
+    const fillToken = async (l: Launch, i: number) => {
       try {
-        const [t, s] = await Promise.all([tokenInfo(l.token), curveState(l.curve)]);
+        const t = await tokenInfo(l.token);
         const md = parseMetadata(l.metadataURI);
         $(`#nm-${i}`).textContent = t.name;
         $(`#sy-${i}`).textContent = `$${t.symbol} · config #${l.configId}`;
         $(`#av-${i}`).textContent = t.symbol.slice(0, 2).toUpperCase();
         if (md.image && /^https:\/\//.test(md.image)) $(`#av-${i}`).innerHTML = `<img src="${esc(md.image)}" alt="" />`;
-        const st = $(`#stt-${i}`); st.textContent = STATUS_LABEL[s.status] ?? String(s.status); st.className = `pill s${s.status}`;
-        const pct = s.status >= 2 ? 100 : s.migrationQuoteThreshold > 0n ? Number((s.quoteReserve * 10000n) / s.migrationQuoteThreshold) / 100 : 0;
-        $(`#pg-${i}`).style.width = Math.min(100, pct) + "%";
-        $(`#rs-${i}`).textContent = `${fmt(s.quoteReserve, 18)} / ${fmt(s.migrationQuoteThreshold, 18)} WETH raised`;
-      } catch { $(`#stt-${i}`).textContent = "n/a"; }
-    }));
+      } catch { /* keep address fallback */ }
+    };
+    const fillCurve = async (l: Launch, i: number) => {
+      const st = $(`#stt-${i}`);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const s = await curveState(l.curve);
+          st.textContent = STATUS_LABEL[s.status] ?? String(s.status); st.className = `pill s${s.status}`;
+          const pct = s.status >= 2 ? 100 : s.migrationQuoteThreshold > 0n ? Number((s.quoteReserve * 10000n) / s.migrationQuoteThreshold) / 100 : 0;
+          $(`#pg-${i}`).style.width = Math.min(100, pct) + "%";
+          $(`#rs-${i}`).textContent = `${fmt(s.quoteReserve, 18)} / ${fmt(s.migrationQuoteThreshold, 18)} WETH raised`;
+          return;
+        } catch { /* retry once */ }
+      }
+      st.textContent = "n/a";
+    };
+    // Names first (cheap, batched), then curve states with limited concurrency.
+    await Promise.all(launches.map((l, i) => fillToken(l, i)));
+    let next = 0;
+    const worker = async () => { while (next < launches.length) { const i = next++; await fillCurve(launches[i], i); } };
+    await Promise.all(Array.from({ length: 4 }, worker));
   } catch (e) {
     box.innerHTML = `<div class="skeleton err">Could not load launches: ${errMsg(e)}</div>`;
   }
@@ -270,6 +297,31 @@ async function openLaunch(l: Launch) {
 }
 
 // ---------- create ----------
+function initialConfigId(): string {
+  const q = new URLSearchParams(location.search).get("config");
+  if (q && /^\d+$/.test(q)) return q;
+  return DEFAULT_CONFIG_ID.toString();
+}
+$("#oc-submit").addEventListener("click", async () => {
+  const status = (h: string) => ($("#oc-status").innerHTML = h);
+  try {
+    const { w, a } = await requireWallet();
+    status("Reading template Config…");
+    const tpl = await readConfig(TEMPLATE_CONFIG_ID);
+    const c: any = { ...tpl.config, partnerRecipient: a, leftoverReceiver: a, liquidityDistribution: { ...tpl.config.liquidityDistribution, partner: a } };
+    status("Simulating Config creation…");
+    const plan = await planCreateAmmoraV4Config(publicClient, CONFIG_REGISTRY, c, tpl.segments, a, a);
+    status("Confirm in your wallet…");
+    const hash = await sendTx(w, a, { to: plan.transaction.to, data: plan.transaction.data, value: plan.transaction.value ?? 0n });
+    status(`Waiting for confirmation… <a target="_blank" rel="noopener" href="${txLink(hash)}">view tx</a>`);
+    const r = await waitOk(hash);
+    const rc = parseAmmoraV4ConfigCreatedReceipt(r, CONFIG_REGISTRY);
+    $<HTMLInputElement>("#c-config").value = rc.configId.toString();
+    await checkConfig();
+    status(`<span class="ok">✓ Config #${rc.configId} created. Partner fees go to ${short(a)}.</span><br/>Share links as <code>?config=${rc.configId}</code>, or set <code>DEFAULT_CONFIG_ID = ${rc.configId}n</code> in src/config.ts. <a target="_blank" rel="noopener" href="${txLink(hash)}">tx</a>`);
+  } catch (e) { status(`<span class="err">${errMsg(e)}</span>`); }
+});
+
 let cfgOk = false;
 let cfgSnap: Awaited<ReturnType<typeof readConfig>> | null = null;
 async function checkConfig() {

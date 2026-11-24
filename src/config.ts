@@ -22,6 +22,8 @@ export const WETH = giwaSepoliaAutoRouteDeployment.contracts.tokens.wrappedNativ
  * Best practice: create your own launchpad Config (launch:team-config) and put its ID here.
  */
 export const DEFAULT_CONFIG_ID = 67n;
+/** Reviewed Config whose economics are cloned when you create your own Config. */
+export const TEMPLATE_CONFIG_ID = 67n;
 export const BLOCKED_CONFIG_IDS: readonly bigint[] = [6n];
 
 export const SLIPPAGE_BPS = 100; // 1%
